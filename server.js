@@ -2,7 +2,6 @@ const express = require('express');
 const dotenv = require('dotenv');
 const mg = require('mailgun-js');
 const cors = require('cors');
-const pLimit = require('p-limit');
 
 dotenv.config();
 
@@ -20,6 +19,8 @@ app.use(express.urlencoded({ extended: true }));
 app.use(cors());
 
 const sendEmail = async (emailInfo) => {
+    const pLimit = (await import('p-limit')).default;
+
     return new Promise((resolve, reject) => {
         mailgun.messages().send(emailInfo, (error, body) => {
             if (error) {
@@ -49,7 +50,7 @@ app.post('/api/email', async (req, res) => {
         html: message
     }));
 
-    const limit = pLimit(10); // Limitar a 10 requisições simultâneas (ajuste conforme necessário)
+    const limit = (await import('p-limit')).default(10); // Limitar a 10 requisições simultâneas (ajuste conforme necessário)
     const sendEmailTasks = emailInfo.map((info) => limit(() => sendEmail(info)));
 
     try {
