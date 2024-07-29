@@ -2,6 +2,7 @@ const express = require('express');
 const dotenv = require('dotenv');
 const mg = require('mailgun-js');
 const cors = require('cors');
+const pLimit = require('p-limit');
 
 dotenv.config();
 
@@ -18,6 +19,20 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors());
 
+const sendEmail = async (emailInfo) => {
+    return new Promise((resolve, reject) => {
+        mailgun.messages().send(emailInfo, (error, body) => {
+            if (error) {
+                console.error('Erro ao enviar email:', error);
+                reject(error);
+            } else {
+                console.log('Email enviado com sucesso:', body);
+                resolve(body);
+            }
+        });
+    });
+};
+
 app.post('/api/email', async (req, res) => {
     const { to, subject, message } = req.body;
 
@@ -25,21 +40,24 @@ app.post('/api/email', async (req, res) => {
         return res.status(400).send({ message: 'Todos os campos são obrigatórios' });
     }
 
-    const emailInfo = {
+    const recipients = Array.isArray(to) ? to : [to]; // Suporta envio para múltiplos destinatários
+
+    const emailInfo = recipients.map((recipient) => ({
         from: '"Plata" <plataimobiliaria@gmail.com>',
-        to: to,
+        to: recipient,
         subject: subject,
         html: message
-    };
+    }));
 
-    console.log(emailInfo);
+    const limit = pLimit(10); // Limitar a 10 requisições simultâneas (ajuste conforme necessário)
+    const sendEmailTasks = emailInfo.map((info) => limit(() => sendEmail(info)));
 
     try {
-        const body = await mailgun.messages().send(emailInfo);
-        res.send({ message: 'Email enviado', body });
+        const results = await Promise.all(sendEmailTasks);
+        res.send({ message: 'Emails enviados', results });
     } catch (error) {
-        console.error('Erro ao enviar email:', error);
-        res.status(500).send({ message: 'Algo correu mal ao enviar o email' });
+        console.error('Erro ao enviar emails:', error);
+        res.status(500).send({ message: 'Algo correu mal ao enviar os emails' });
     }
 });
 
