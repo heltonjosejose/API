@@ -2,6 +2,7 @@ const express = require('express');
 const dotenv = require('dotenv');
 const mg = require('mailgun-js');
 const cors = require('cors');
+const retry = require('retry');
 
 dotenv.config();
 
@@ -19,16 +20,34 @@ app.use(express.urlencoded({ extended: true }));
 app.use(cors());
 
 const sendEmail = async (emailInfo) => {
-    const pLimit = (await import('p-limit')).default;
-
     return new Promise((resolve, reject) => {
-        mailgun.messages().send(emailInfo, (error, body) => {
-            if (error) {
-                console.error('Erro ao enviar email:', error);
-                reject(error);
-            } else {
-                console.log('Email enviado com sucesso:', body);
-                resolve(body);
+        const operation = retry.operation({
+            retries: 5, // número de tentativas
+            factor: 2, // fator de crescimento exponencial
+            minTimeout: 1000, // tempo mínimo entre tentativas
+            maxTimeout: 60000, // tempo máximo entre tentativas
+        });
+
+        operation.attempt(async (currentAttempt) => {
+            try {
+                mailgun.messages().send(emailInfo, (error, body) => {
+                    if (operation.retry(error)) {
+                        console.log(`Tentativa ${currentAttempt} falhou, tentando novamente...`);
+                        return;
+                    }
+                    if (error) {
+                        console.error('Erro ao enviar email:', error);
+                        reject(operation.mainError());
+                    } else {
+                        console.log('Email enviado com sucesso:', body);
+                        resolve(body);
+                    }
+                });
+            } catch (error) {
+                if (!operation.retry(error)) {
+                    console.error('Erro ao enviar email após múltiplas tentativas:', error);
+                    reject(error);
+                }
             }
         });
     });
@@ -50,7 +69,9 @@ app.post('/api/email', async (req, res) => {
         html: message
     }));
 
-    const limit = (await import('p-limit')).default(10); // Limitar a 10 requisições simultâneas (ajuste conforme necessário)
+    // Importação dinâmica do p-limit
+    const { default: pLimit } = await import('p-limit');
+    const limit = pLimit(10); // Limitar a 10 requisições simultâneas (ajuste conforme necessário)
     const sendEmailTasks = emailInfo.map((info) => limit(() => sendEmail(info)));
 
     try {
