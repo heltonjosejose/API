@@ -3,6 +3,7 @@ const dotenv = require('dotenv');
 const mg = require('mailgun-js');
 const cors = require('cors');
 const retry = require('retry');
+const supabase = require('@supabase/supabase-js');
 
 dotenv.config();
 
@@ -14,6 +15,9 @@ const mailgun = mg({
     apiKey: process.env.MAILGUN_API_KEY,
     domain: process.env.MAILGUN_DOMAIN
 });
+
+// Configurar Supabase
+const supabaseClient = supabase.createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_API_KEY);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -82,6 +86,78 @@ app.post('/api/email', async (req, res) => {
         res.status(500).send({ message: 'Algo correu mal ao enviar os emails' });
     }
 });
+
+app.get('/api/close-negotiation/:id', async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        const { error } = await supabaseClient
+            .from('schedules')
+            .update({ negotiation_status: 'closed' })
+            .eq('id', id);
+
+        if (error) {
+            console.error('Erro ao fechar a negociação:', error);
+            res.status(500).send('Erro ao fechar a negociação.');
+        } else {
+            res.redirect(`${process.env.FRONTEND_URL}/thank-you`);
+        }
+    } catch (err) {
+        console.error('Erro ao processar o fechamento da negociação:', err);
+        res.status(500).send('Erro ao processar o fechamento da negociação.');
+    }
+});
+
+
+
+// Função para monitorar visitas e enviar e-mails de acompanhamento
+const monitorVisits = async () => {
+    console.log('Monitorando visitas e enviando e-mails de acompanhamento...');
+
+    try {
+        const { data: schedules, error } = await supabaseClient
+            .from('schedules')
+            .select('id, user_email, user_name, date, negotiation_status')
+            .lt('date', new Date().toISOString())
+            .eq('negotiation_status', 'open');
+
+        if (error) {
+            console.error('Erro ao obter agendamentos passados:', error);
+            return;
+        }
+
+        for (const schedule of schedules) {
+            const { id, user_email, user_name, date } = schedule;
+            const visitDate = new Date(date);
+
+            // URL para marcar negociação como fechada
+            const closeNegotiationUrl = `${process.env.BASE_URL}/api/close-negotiation/${id}`;
+
+            // Montar a mensagem de acompanhamento com botão para fechar negociação
+            const message = `
+                <p>Olá ${user_name},</p>
+                <p>Você teve uma visita agendada no dia ${visitDate.toLocaleDateString()}. Gostaríamos de saber como foi a visita e qual é o estado da negociação.</p>
+                <p>Se você já fechou a negociação, clique no botão abaixo:</p>
+                <a href="${closeNegotiationUrl}" style="padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none;">Fechar Negociação</a>
+            `;
+
+            await sendEmail({
+                from: '"Plata" <plataimobiliaria@gmail.com>',
+                to: user_email,
+                subject: 'Acompanhamento da visita ao imóvel',
+                html: message,
+            });
+
+            console.log(`Email de acompanhamento enviado para ${user_email}`);
+        }
+    } catch (err) {
+        console.error('Erro ao monitorar visitas:', err);
+    }
+};
+
+
+// Iniciar o monitoramento de visitas a cada 1 hora
+setInterval(monitorVisits, 60 * 60 * 1000);
 
 app.listen(port, () => {
     console.log(`Executando em http://localhost:${port}`);
