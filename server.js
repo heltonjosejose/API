@@ -148,7 +148,7 @@ const monitorVisits = async () => {
             const message = `
                                         <p>Olá ${user_name},</p>
                         <p>Você teve uma visita agendada no dia ${visitDate.toLocaleDateString()}. Gostaríamos de saber como foi a visita e qual é o estado atual da negociação do imóvel.</p>
-                        <p>Para nos ajudar a manter nossas informações atualizadas e fornecer o melhor suporte possível, por favor, selecione uma das opções abaixo que melhor descreve a situação:</p>
+                        <p>Para nos ajudar a fornecer o melhor suporte possível, por favor, selecione uma das opções abaixo que melhor descreve a situação:</p>
 
                        <p style="text-align: center;">
                             <a href="${closeNegotiationUrl}&status=closed" style="display: inline-block; padding: 12px 24px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px; box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1); font-size: 16px; margin-bottom: 10px;">✔️ Fechei a Negociação</a>
