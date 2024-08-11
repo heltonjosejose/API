@@ -150,13 +150,14 @@ const monitorVisits = async () => {
                         <p>Você teve uma visita agendada no dia ${visitDate.toLocaleDateString()}. Gostaríamos de saber como foi a visita e qual é o estado atual da negociação do imóvel.</p>
                         <p>Para nos ajudar a manter nossas informações atualizadas e fornecer o melhor suporte possível, por favor, selecione uma das opções abaixo que melhor descreve a situação:</p>
 
-                        <p>
-                            <a href="${closeNegotiationUrl}&status=closed" style="padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none;">Fechei a Negociação</a>
+                        <p style="text-align: center;">
+                            <a href="${closeNegotiationUrl}&status=closed" style="display: inline-block; padding: 12px 24px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px; box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1); font-size: 16px; margin-bottom: 10px;">Fechei a Negociação</a>
                             <br><br>
-                            <a href="${closeNegotiationUrl}&status=negotiating" style="padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none;">Ainda Estou Negociando</a>
+                            <a href="${closeNegotiationUrl}&status=negotiating" style="display: inline-block; padding: 12px 24px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 5px; box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1); font-size: 16px; margin-bottom: 10px;">Ainda Estou Negociando</a>
                             <br><br>
-                            <a href="${closeNegotiationUrl}&status=unavailable" style="padding: 10px 20px; background-color: #F44336; color: white; text-decoration: none;">Imóvel Não Está Mais Disponível</a>
+                            <a href="${closeNegotiationUrl}&status=unavailable" style="display: inline-block; padding: 12px 24px; background-color: #F44336; color: white; text-decoration: none; border-radius: 5px; box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1); font-size: 16px;">Imóvel Não Está Mais Disponível</a>
                         </p>
+
 
                         <p>Seu feedback é muito importante para nós. Caso tenha alguma dúvida ou precise de mais informações, não hesite em entrar em contato.</p>
 
