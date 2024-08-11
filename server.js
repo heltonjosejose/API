@@ -56,6 +56,17 @@ const sendEmail = async (emailInfo) => {
         });
     });
 };
+// Endpoint temporário para testar a função monitorVisits
+app.get('/api/test-monitor', async (req, res) => {
+    try {
+        await monitorVisits();
+        res.send('Monitoramento de visitas executado com sucesso.');
+    } catch (err) {
+        console.error('Erro ao executar o monitoramento de visitas:', err);
+        res.status(500).send('Erro ao executar o monitoramento de visitas.');
+    }
+});
+
 
 app.post('/api/email', async (req, res) => {
     const { to, subject, message } = req.body;
@@ -135,10 +146,23 @@ const monitorVisits = async () => {
 
             // Montar a mensagem de acompanhamento com botão para fechar negociação
             const message = `
-                <p>Olá ${user_name},</p>
-                <p>Você teve uma visita agendada no dia ${visitDate.toLocaleDateString()}. Gostaríamos de saber como foi a visita e qual é o estado da negociação.</p>
-                <p>Se você já fechou a negociação, clique no botão abaixo:</p>
-                <a href="${closeNegotiationUrl}" style="padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none;">Fechar Negociação</a>
+                                        <p>Olá ${user_name},</p>
+                        <p>Você teve uma visita agendada no dia ${visitDate.toLocaleDateString()}. Gostaríamos de saber como foi a visita e qual é o estado atual da negociação do imóvel.</p>
+                        <p>Para nos ajudar a manter nossas informações atualizadas e fornecer o melhor suporte possível, por favor, selecione uma das opções abaixo que melhor descreve a situação:</p>
+
+                        <p>
+                            <a href="${closeNegotiationUrl}&status=closed" style="padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none;">Fechei a Negociação</a>
+                            <br><br>
+                            <a href="${closeNegotiationUrl}&status=negotiating" style="padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none;">Ainda Estou Negociando</a>
+                            <br><br>
+                            <a href="${closeNegotiationUrl}&status=unavailable" style="padding: 10px 20px; background-color: #F44336; color: white; text-decoration: none;">Imóvel Não Está Mais Disponível</a>
+                        </p>
+
+                        <p>Seu feedback é muito importante para nós. Caso tenha alguma dúvida ou precise de mais informações, não hesite em entrar em contato.</p>
+
+                        <p>Atenciosamente,</p>
+                        <p>Equipe Plata Imobiliária</p>
+
             `;
 
             await sendEmail({
