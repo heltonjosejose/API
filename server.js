@@ -177,7 +177,7 @@ const monitorVisits = async () => {
     } finally {
         console.log('Tempo esgotando, aguardando 5 minutos para próxima execução...');
 
-        setTimeout(monitorVisits, 5 * 60 * 1000); // 5 minutos
+        setTimeout(monitorVisits, 24 * 60 * 60 * 1000); // 24 horas
     }
 };
 
