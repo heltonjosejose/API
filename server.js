@@ -56,6 +56,7 @@ const sendEmail = async (emailInfo) => {
         });
     });
 };
+
 // Endpoint temporário para testar a função monitorVisits
 app.get('/api/test-monitor', async (req, res) => {
     try {
@@ -66,7 +67,6 @@ app.get('/api/test-monitor', async (req, res) => {
         res.status(500).send('Erro ao executar o monitoramento de visitas.');
     }
 });
-
 
 app.post('/api/email', async (req, res) => {
     const { to, subject, message } = req.body;
@@ -100,11 +100,12 @@ app.post('/api/email', async (req, res) => {
 
 app.get('/api/close-negotiation/:id', async (req, res) => {
     const { id } = req.params;
+    const { status } = req.query;
 
     try {
         const { error } = await supabaseClient
             .from('schedules')
-            .update({ negotiation_status: 'closed' })
+            .update({ negotiation_status: status })
             .eq('id', id);
 
         if (error) {
@@ -118,8 +119,6 @@ app.get('/api/close-negotiation/:id', async (req, res) => {
         res.status(500).send('Erro ao processar o fechamento da negociação.');
     }
 });
-
-
 
 // Função para monitorar visitas e enviar e-mails de acompanhamento
 const monitorVisits = async () => {
@@ -141,32 +140,27 @@ const monitorVisits = async () => {
             const { id, user_email, user_name, date } = schedule;
             const visitDate = new Date(date);
 
-            // URL para marcar negociação como fechada
             const closeNegotiationUrl = `${process.env.BASE_URL}/api/close-negotiation/${id}`;
 
-            // Montar a mensagem de acompanhamento com botão para fechar negociação
             const message = `
-                                        <p>Olá ${user_name},</p>
-                        <p>Você teve uma visita agendada no dia ${visitDate.toLocaleDateString()}. Gostaríamos de saber como foi a visita e qual é o estado atual da negociação do imóvel.</p>
-                        <p>Para nos ajudar a fornecer o melhor suporte possível, por favor, selecione uma das opções abaixo que melhor descreve a situação:</p>
+                <p>Olá ${user_name},</p>
+                <p>Você teve uma visita agendada no dia ${visitDate.toLocaleDateString()}. Gostaríamos de saber como foi a visita e qual é o estado atual da negociação do imóvel.</p>
+                <p>Para nos ajudar a fornecer o melhor suporte possível, por favor, selecione uma das opções abaixo que melhor descreve a situação:</p>
 
-                       <p style="text-align: center;">
-                            <a href="${closeNegotiationUrl}&status=closed" style="display: inline-block; padding: 12px 24px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px; box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1); font-size: 16px; margin-bottom: 10px;">✔️ Fechei a Negociação</a>
-                            <br><br>
-                            <a href="${closeNegotiationUrl}&status=negotiating" style="display: inline-block; padding: 12px 24px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 5px; box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1); font-size: 16px; margin-bottom: 10px;">💬 Ainda Estou Negociando</a>
-                            <br><br>
-                            <a href="${closeNegotiationUrl}&status=unavailable" style="display: inline-block; padding: 12px 24px; background-color: #F44336; color: white; text-decoration: none; border-radius: 5px; box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1); font-size: 16px; margin-bottom: 10px;">🚫 Imóvel Não Está Mais Disponível</a>
-                            <br><br>
-                            <a href="${closeNegotiationUrl}&status=disliked" style="display: inline-block; padding: 12px 24px; background-color: #9E9E9E; color: white; text-decoration: none; border-radius: 5px; box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1); font-size: 16px;">👎 Não Gostei do Imóvel</a>
-                        </p>
+                <p style="text-align: center;">
+                    <a href="${closeNegotiationUrl}&status=closed" style="display: inline-block; padding: 12px 24px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px; box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1); font-size: 16px; margin-bottom: 10px;">✔️ Fechei a Negociação</a>
+                    <br><br>
+                    <a href="${closeNegotiationUrl}&status=negotiating" style="display: inline-block; padding: 12px 24px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 5px; box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1); font-size: 16px; margin-bottom: 10px;">💬 Ainda Estou Negociando</a>
+                    <br><br>
+                    <a href="${closeNegotiationUrl}&status=unavailable" style="display: inline-block; padding: 12px 24px; background-color: #F44336; color: white; text-decoration: none; border-radius: 5px; box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1); font-size: 16px; margin-bottom: 10px;">🚫 Imóvel Não Está Mais Disponível</a>
+                    <br><br>
+                    <a href="${closeNegotiationUrl}&status=disliked" style="display: inline-block; padding: 12px 24px; background-color: #9E9E9E; color: white; text-decoration: none; border-radius: 5px; box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1); font-size: 16px;">👎 Não Gostei do Imóvel</a>
+                </p>
 
+                <p>Seu feedback é muito importante para nós. Caso tenha alguma dúvida ou precise de mais informações, não hesite em entrar em contato.</p>
 
-
-                        <p>Seu feedback é muito importante para nós. Caso tenha alguma dúvida ou precise de mais informações, não hesite em entrar em contato.</p>
-
-                        <p>Atenciosamente,</p>
-                        <p>Equipe Plata Imobiliária</p>
-
+                <p>Atenciosamente,</p>
+                <p>Equipe Plata Imobiliária</p>
             `;
 
             await sendEmail({
@@ -180,12 +174,16 @@ const monitorVisits = async () => {
         }
     } catch (err) {
         console.error('Erro ao monitorar visitas:', err);
+    } finally {
+        console.log('Tempo esgotando, aguardando 5 minutos para próxima execução...');
+
+        setTimeout(monitorVisits, 5 * 60 * 1000); // 5 minutos
     }
 };
 
+// Iniciar o monitoramento contínuo
+monitorVisits();
 
-// Iniciar o monitoramento de visitas a cada 1 hora
-setInterval(monitorVisits, 60 * 60 * 1000);
 
 app.listen(port, () => {
     console.log(`Executando em http://localhost:${port}`);
