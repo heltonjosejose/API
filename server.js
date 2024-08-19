@@ -175,7 +175,7 @@ const monitorVisits = async () => {
     } catch (err) {
         console.error('Erro ao monitorar visitas:', err);
     } finally {
-        console.log('Tempo esgotando, aguardando 5 minutos para próxima execução...');
+        console.log('Tempo esgotando, aguardando 24 horas para próxima execução...');
 
         setTimeout(monitorVisits, 24 * 60 * 60 * 1000); // 24 horas
     }
