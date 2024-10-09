@@ -180,6 +180,28 @@ const monitorVisits = async () => {
         setTimeout(monitorVisits, 24 * 60 * 60 * 1000); // 24 horas
     }
 };
+// Rota para listar imóveis pendentes de aprovação jj
+app.get('/api/properties/pending', async (req, res) => {
+    try {
+        // Query no Supabase para pegar os imóveis com active = false
+        const { data, error } = await supabaseClient
+            .from('listing')
+            .select('*, listingImages(url, listing_id)')
+            .eq('active', false) // Removeu o filtro por 'id'
+                        
+        if (error) {
+            console.error('Erro ao buscar imóveis pendentes de aprovação:', error);
+            return res.status(500).send({ message: 'Erro ao buscar imóveis pendentes de aprovação.' });
+        }
+
+        // Enviar a lista de imóveis pendentes como resposta
+        res.send({ properties: data });
+    } catch (err) {
+        console.error('Erro ao processar a requisição:', err);
+        res.status(500).send({ message: 'Erro ao processar a requisição.' });
+    }
+});
+
 
 // Iniciar o monitoramento contínuo
 monitorVisits();
