@@ -270,50 +270,50 @@ app.post('/api/listing/title', async (req, res) => {
     const { listingId } = req.body;
 
     try {
-        // Verifica se o ID da listagem foi fornecido
         if (!listingId) {
             return res.status(400).json({ error: 'ID da listagem é obrigatório.' });
         }
 
-        // Obtém a listagem do banco de dados
-        const { data: listing, error: fetchError } = await supabase
+        console.log(`Buscando listagem com ID: ${listingId}`);
+
+        // Use a instância correta do Supabase: supabaseClient
+        const { data: listing, error: fetchError } = await supabaseClient
             .from('listing')
             .select('propertyType, address')
             .eq('id', listingId)
             .single();
 
         if (fetchError) {
-            throw fetchError;
+            console.error('Erro ao buscar a listagem:', fetchError);
+            return res.status(500).json({ error: 'Erro ao buscar a listagem.' });
         }
 
-        // Verifica se a listagem foi encontrada
         if (!listing) {
             return res.status(404).json({ error: 'Listagem não encontrada.' });
         }
 
-        // Cria o título
         const title = `${listing.propertyType} em ${listing.address}`;
+        console.log('Criando título:', title);
 
-        // Atualiza o título na tabela
-        const { data, error: updateError } = await supabase
+        const { data: updatedData, error: updateError } = await supabaseClient
             .from('listing')
             .update({ title })
             .eq('id', listingId)
             .select();
 
         if (updateError) {
-            throw updateError;
+            console.error('Erro ao atualizar o título:', updateError);
+            return res.status(500).json({ error: 'Erro ao atualizar o título.' });
         }
 
-        // Retorna a resposta de sucesso
-        res.status(200).json({ message: 'Título criado com sucesso!', data });
+        console.log('Título atualizado com sucesso:', updatedData);
+
+        res.status(200).json({ message: 'Título criado com sucesso!', data: updatedData });
     } catch (error) {
         console.error('Erro ao criar o título:', error.message);
         res.status(500).json({ error: 'Erro ao criar o título.' });
     }
 });
-
-
 
 
 // Iniciar o monitoramento contínuo
