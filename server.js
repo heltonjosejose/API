@@ -201,6 +201,71 @@ app.get('/api/properties/pending', async (req, res) => {
         res.status(500).send({ message: 'Erro ao processar a requisição.' });
     }
 });
+app.patch('/api/properties/:listingId/approve', async (req, res) => {
+    try {
+        const { listingId } = req.params;
+
+        if (!listingId) {
+            return res.status(400).json({
+                message: 'ID do imóvel é obrigatório'
+            });
+        }
+
+        // Verifica se o imóvel existe
+        const { data: existingListing, error: fetchError } = await supabaseClient
+            .from('listing')
+            .select('id, active')
+            .eq('id', listingId)
+            .single();
+
+        if (fetchError || !existingListing) {
+            console.error('Erro ao buscar imóvel ou imóvel não encontrado:', fetchError);
+            return res.status(404).json({
+                message: 'Imóvel não encontrado ou erro na busca'
+            });
+        }
+
+        // Verifica se o imóvel já está aprovado
+        if (existingListing.active) {
+            return res.status(400).json({
+                message: 'Imóvel já está aprovado'
+            });
+        }
+
+        // Atualiza o status do imóvel para ativo e adiciona a data de aprovação
+        const { data: updatedListing, error: updateError } = await supabaseClient
+            .from('listing')
+            .update({ 
+                active: true,
+                approved_at: new Date().toISOString()
+            })
+            .eq('id', listingId)
+            .select('id, active, approved_at') // Retorna o imóvel atualizado
+            .single();
+
+        if (updateError) {
+            console.error('Erro ao atualizar o imóvel no Supabase:', updateError);
+            return res.status(500).json({
+                message: 'Erro ao aprovar o imóvel',
+                error: updateError.message
+            });
+        }
+
+        // Retorna o imóvel atualizado como resposta
+        return res.status(200).json({
+            message: 'Imóvel aprovado com sucesso',
+            listing: updatedListing
+        });
+
+    } catch (error) {
+        console.error('Erro no servidor:', error);
+        return res.status(500).json({
+            message: 'Erro interno do servidor',
+            error: error.message
+        });
+    }
+});
+
 
 
 // Iniciar o monitoramento contínuo
