@@ -4,6 +4,7 @@ const mg = require('mailgun-js');
 const cors = require('cors');
 const retry = require('retry');
 const supabase = require('@supabase/supabase-js');
+const twilio = require('twilio');
 
 dotenv.config();
 
@@ -16,12 +17,147 @@ const mailgun = mg({
     domain: process.env.MAILGUN_DOMAIN
 });
 
+// Configurar Twilio
+const twilioClient = twilio(
+    process.env.TWILIO_ACCOUNT_SID,
+    process.env.TWILIO_AUTH_TOKEN
+);
+
 // Configurar Supabase
 const supabaseClient = supabase.createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_API_KEY);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors());
+
+// Função para enviar notificação via WhatsApp
+async function sendWhatsAppNotification(userPhone, listing) {
+    const message = `
+🏠 Novo Imóvel Correspondente às Suas Preferências
+
+Detalhes do imóvel:
+- Tipo: ${listing.propertyType}
+- Quartos: ${listing.bedroom}
+- Mobiliado: ${listing.furnished ? 'Sim' : 'Não'}
+- Tipo de Pagamento: ${listing.paymentType}
+- Preço: AOA ${listing.price.toFixed(2)}
+
+Para mais detalhes, acesse nossa plataforma.
+
+Atenciosamente,
+Equipe Plata Imobiliária
+    `;
+
+    try {
+        const response = await twilioClient.messages.create({
+            body: message,
+            from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
+            to: `whatsapp:${userPhone}`
+        });
+        console.log(`Notificação WhatsApp enviada para ${userPhone}, SID: ${response.sid}`);
+        return response;
+    } catch (error) {
+        console.error(`Erro ao enviar notificação WhatsApp para ${userPhone}:`, error);
+        throw error;
+    }
+}
+
+// Função atualizada para verificar a listagem contra as preferências dos usuários
+async function checkListingAgainstPreferences(listing) {
+    const { data: userPreferences, error } = await supabaseClient
+        .from('searches')
+        .select('*');
+
+    if (error) {
+        console.error('Erro ao buscar preferências:', error);
+        return;
+    }
+
+    console.log('Preferências dos usuários:', userPreferences);
+
+    for (const userPreference of userPreferences) {
+        const isTypeMatch = 
+            userPreference.propertyType === listing.propertyType || 
+            (userPreference.propertyType === "Apartamento" && listing.propertyType === "Cobertura") ||
+            (userPreference.propertyType === "Casa" && listing.propertyType === "Sobrado");
+        const isBedroomMatch = 
+            userPreference.bedroom === listing.bedroom || 
+            (userPreference.bedroom && Math.abs(userPreference.bedroom - listing.bedroom) <= 1);
+        const isFurnishedMatch = 
+            userPreference.furnished === listing.furnished || 
+            userPreference.furnished === null;
+        const isPaymentTypeMatch = 
+            userPreference.paymentType === "Qualquer" || 
+            userPreference.paymentType === listing.paymentType;
+        const isPriceMatch = 
+            listing.price >= userPreference.minPrice && 
+            listing.price <= userPreference.maxPrice;
+
+        const match = isTypeMatch && isBedroomMatch && isFurnishedMatch && isPaymentTypeMatch && isPriceMatch;
+
+        if (match) {
+            // Enviar notificações em paralelo
+            await Promise.all([
+                sendEmailNotification(userPreference.user_email, listing),
+                // Verificar se o usuário tem número de telefone cadastrado
+                userPreference.user_phone ? 
+                    sendWhatsAppNotification(userPreference.user_phone, listing) : 
+                    Promise.resolve()
+            ]);
+        }
+    }
+}
+
+  
+  
+  // Função para enviar notificação por email
+  async function sendEmailNotification(userEmail, listing) {
+    const message = `
+      <h1>Novo Imóvel Correspondente às Suas Preferências</h1>
+      <p>Olá,</p>
+      <p>Um novo imóvel que corresponde às suas preferências de busca foi anunciado:</p>
+      <ul>
+        <li><strong>Tipo:</strong> ${listing.propertyType}</li>
+        <li><strong>Quartos:</strong> ${listing.bedroom}</li>
+        <li><strong>Mobiliado:</strong> ${listing.furnished ? 'Sim' : 'Não'}</li>
+        <li><strong>Tipo de Pagamento:</strong> ${listing.paymentType}</li>
+        <li><strong>Preço:</strong> R$ ${listing.price.toFixed(2)}</li>
+      </ul>
+      <p>Para mais detalhes, acesse nossa plataforma.</p>
+      <p>Atenciosamente,<br>Equipe Plata Imobiliária</p>
+    `;
+  
+    const emailInfo = {
+      from: '"Plata" <plataimobiliaria@gmail.com>',
+      to: userEmail,
+      subject: 'Novo Imóvel Correspondente às Suas Preferências',
+      html: message
+    };
+  
+    try {
+      await sendEmail(emailInfo);
+      console.log(`Notificação enviada para ${userEmail}`);
+    } catch (error) {
+      console.error(`Erro ao enviar notificação para ${userEmail}:`, error);
+    }
+  }
+  
+  // Nova rota para receber dados de nova listagem e verificar correspondências
+  app.post('/api/listing/notify', async (req, res) => {
+    const newListing = req.body;
+  
+    if (!newListing || !newListing.id) {
+      return res.status(400).json({ error: 'Dados da listagem inválidos ou incompletos.' });
+    }
+  
+    try {
+      await checkListingAgainstPreferences(newListing);
+      res.status(200).json({ message: 'Verificação de correspondências concluída.' });
+    } catch (error) {
+      console.error('Erro ao processar notificação de nova listagem:', error);
+      res.status(500).json({ error: 'Erro ao processar notificação de nova listagem.' });
+    }
+  });
 
 const sendEmail = async (emailInfo) => {
     return new Promise((resolve, reject) => {
@@ -120,14 +256,13 @@ app.get('/api/close-negotiation/:id', async (req, res) => {
     }
 });
 
-// Função para monitorar visitas e enviar e-mails de acompanhamento
 const monitorVisits = async () => {
-    console.log('Monitorando visitas e enviando e-mails de acompanhamento...');
+    console.log('Monitorando visitas e enviando notificações de acompanhamento...');
 
     try {
         const { data: schedules, error } = await supabaseClient
             .from('schedules')
-            .select('id, user_email, user_name, date, negotiation_status')
+            .select('id, user_email, user_name, date, negotiation_status, user_phone')
             .lt('date', new Date().toISOString())
             .eq('negotiation_status', 'open');
 
@@ -137,12 +272,12 @@ const monitorVisits = async () => {
         }
 
         for (const schedule of schedules) {
-            const { id, user_email, user_name, date } = schedule;
+            const { id, user_email, user_name, date, user_phone } = schedule;
             const visitDate = new Date(date);
-
             const closeNegotiationUrl = `${process.env.BASE_URL}/api/close-negotiation/${id}`;
 
-            const message = `
+            // Enviar email
+            const emailMessage = `
                 <p>Olá ${user_name},</p>
                 <p>Você teve uma visita agendada no dia ${visitDate.toLocaleDateString()}. Gostaríamos de saber como foi a visita e qual é o estado atual da negociação do imóvel.</p>
                 <p>Para nos ajudar a fornecer o melhor suporte possível, por favor, selecione uma das opções abaixo que melhor descreve a situação:</p>
@@ -163,23 +298,48 @@ const monitorVisits = async () => {
                 <p>Equipe Plata Imobiliária</p>
             `;
 
-            await sendEmail({
-                from: '"Plata" <plataimobiliaria@gmail.com>',
-                to: user_email,
-                subject: 'Acompanhamento da visita ao imóvel',
-                html: message,
-            });
+            // Enviar WhatsApp
+            const whatsappMessage = `
+Olá ${user_name},
 
-            console.log(`Email de acompanhamento enviado para ${user_email}`);
+Você teve uma visita agendada no dia ${visitDate.toLocaleDateString()}. Gostaríamos de saber como foi a visita e qual é o estado atual da negociação do imóvel.
+
+Para nos ajudar, por favor, acesse o link abaixo e selecione a opção que melhor descreve a situação:
+${process.env.BASE_URL}/feedback/${id}
+
+Seu feedback é muito importante para nós. 
+
+Atenciosamente,
+Equipe Plata Imobiliária
+            `;
+
+            // Enviar notificações em paralelo
+            await Promise.all([
+                sendEmail({
+                    from: '"Plata" <plataimobiliaria@gmail.com>',
+                    to: user_email,
+                    subject: 'Acompanhamento da visita ao imóvel',
+                    html: emailMessage,
+                }),
+                user_phone ? 
+                    twilioClient.messages.create({
+                        body: whatsappMessage,
+                        from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
+                        to: `whatsapp:${user_phone}`
+                    }) : 
+                    Promise.resolve()
+            ]);
+
+            console.log(`Notificações de acompanhamento enviadas para ${user_email}`);
         }
     } catch (err) {
         console.error('Erro ao monitorar visitas:', err);
     } finally {
         console.log('Tempo esgotando, aguardando 24 horas para próxima execução...');
-
-        setTimeout(monitorVisits, 24 * 60 * 60 * 1000); // 24 horas
+        setTimeout(monitorVisits, 24 * 60 * 60 * 1000);
     }
 };
+
 // Rota para listar imóveis pendentes de aprovação jj
 app.get('/api/properties/pending', async (req, res) => {
     try {
@@ -201,6 +361,55 @@ app.get('/api/properties/pending', async (req, res) => {
         res.status(500).send({ message: 'Erro ao processar a requisição.' });
     }
 });
+// Função para enviar notificação de aprovação via WhatsApp
+async function sendPropertyApprovalWhatsApp(userPhone, propertyDetails, baseUrl) {
+    // Criar o slug a partir do endereço (função auxiliar)
+    const createSlug = (address) => {
+        return address
+            .toLowerCase()
+            .replace(/[^\w\s-]/g, '') // Remove caracteres especiais
+            .replace(/\s+/g, '-') // Substitui espaços por hífens
+            .replace(/-+/g, '-') // Remove hífens duplicados
+            .trim(); // Remove espaços no início e fim
+    };
+
+    const propertySlug = createSlug(propertyDetails.address);
+    const propertyLink = `${baseUrl}/view-listing/${propertyDetails.id}/${propertySlug}`;
+
+    const message = `
+🏠 *Parabéns! Seu imóvel foi aprovado*
+
+Seu imóvel localizado em *${propertyDetails.address}* foi aprovado e já está disponível em nossa plataforma.
+
+*Detalhes do imóvel:*
+📍 Tipo: ${propertyDetails.propertyType}
+🛏️ Quartos: ${propertyDetails.bedroom}
+🚿 Banheiros: ${propertyDetails.bathroom}
+💰 Preço: AOA ${propertyDetails.price.toFixed(2)}
+
+Visualize seu imóvel aqui: ${propertyLink}
+
+Se precisar de alguma alteração ou tiver dúvidas, entre em contato conosco.
+
+Atenciosamente,
+Equipe Plata Imobiliária
+    `;
+
+    try {
+        const response = await twilioClient.messages.create({
+            body: message,
+            from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
+            to: `whatsapp:${userPhone}`
+        });
+        console.log(`Notificação de aprovação enviada via WhatsApp para ${userPhone}, SID: ${response.sid}`);
+        return response;
+    } catch (error) {
+        console.error(`Erro ao enviar notificação WhatsApp para ${userPhone}:`, error);
+        throw error;
+    }
+}
+
+// Atualizar a rota de aprovação para incluir a notificação WhatsApp
 app.patch('/api/properties/:listingId/approve', async (req, res) => {
     try {
         const { listingId } = req.params;
@@ -211,14 +420,14 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
             });
         }
 
-        // Verifica se o imóvel existe
-        const { data: existingListing, error: fetchError } = await supabaseClient
+        // Buscar detalhes completos do imóvel e informações do usuário
+        const { data: listing, error: fetchError } = await supabaseClient
             .from('listing')
-            .select('id, active')
+            .select('*, users!inner(*)')
             .eq('id', listingId)
             .single();
 
-        if (fetchError || !existingListing) {
+        if (fetchError || !listing) {
             console.error('Erro ao buscar imóvel ou imóvel não encontrado:', fetchError);
             return res.status(404).json({
                 message: 'Imóvel não encontrado ou erro na busca'
@@ -226,13 +435,13 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
         }
 
         // Verifica se o imóvel já está aprovado
-        if (existingListing.active) {
+        if (listing.active) {
             return res.status(400).json({
                 message: 'Imóvel já está aprovado'
             });
         }
 
-        // Atualiza o status do imóvel para ativo e adiciona a data de aprovação
+        // Atualiza o status do imóvel para ativo
         const { data: updatedListing, error: updateError } = await supabaseClient
             .from('listing')
             .update({ 
@@ -240,7 +449,7 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
                 approved_at: new Date().toISOString()
             })
             .eq('id', listingId)
-            .select('id, active, approved_at') // Retorna o imóvel atualizado
+            .select()
             .single();
 
         if (updateError) {
@@ -249,6 +458,20 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
                 message: 'Erro ao aprovar o imóvel',
                 error: updateError.message
             });
+        }
+
+        // Enviar notificação WhatsApp se o usuário tiver número de telefone
+        if (listing.users?.phone) {
+            try {
+                await sendPropertyApprovalWhatsApp(
+                    listing.users.phone,
+                    listing,
+                    process.env.BASE_URL
+                );
+            } catch (whatsappError) {
+                console.error('Erro ao enviar notificação WhatsApp:', whatsappError);
+                // Não interrompe o fluxo se a notificação falhar
+            }
         }
 
         // Retorna o imóvel atualizado como resposta
@@ -265,6 +488,7 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
         });
     }
 });
+
 // Endpoint para criar o título
 app.post('/api/listing/title', async (req, res) => {
     const { listingId } = req.body;
