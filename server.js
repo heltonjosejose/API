@@ -549,14 +549,14 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
         console.log('[DEBUG] Buscando detalhes do imóvel:', { listingId });
         const { data: listing, error: fetchError } = await supabaseClient
             .from('listing')
-            .select('*')
+            .select('*, createdBy')  // Explicitamente selecionando o campo createdBy
             .eq('id', listingId)
             .single();
 
         console.log('[DEBUG] Resultado da busca do imóvel:', {
             found: !!listing,
             hasError: !!fetchError,
-            email: listing?.email,
+            createdBy: listing?.createdBy,  // Logando o createdBy em vez de email
             active: listing?.active
         });
 
@@ -610,14 +610,14 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
         let whatsappNotificationSent = false;
         let whatsappError = null;
 
-        if (listing.email) {
+        if (listing.createdBy) {  // Verificando createdBy em vez de email
             console.log('[DEBUG] Iniciando envio de notificação WhatsApp:', {
-                email: listing.email,
+                createdBy: listing.createdBy,
                 listingId
             });
             try {
                 await sendPropertyApprovalWhatsApp(
-                    listing.email,
+                    listing.createdBy,  // Usando createdBy em vez de email
                     listing,
                     process.env.BASE_URL
                 );
@@ -627,13 +627,13 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
                 console.error('[DEBUG] Erro ao enviar notificação WhatsApp:', {
                     error: error.message,
                     stack: error.stack,
-                    email: listing.email,
+                    createdBy: listing.createdBy,
                     listingId
                 });
                 whatsappError = error.message;
             }
         } else {
-            console.log('[DEBUG] Email não encontrado para envio de notificação:', {
+            console.log('[DEBUG] CreatedBy não encontrado para envio de notificação:', {
                 listingId
             });
         }
