@@ -361,117 +361,105 @@ app.get('/api/properties/pending', async (req, res) => {
         res.status(500).send({ message: 'Erro ao processar a requisição.' });
     }
 });
+// Função auxiliar para formatar valor monetário
+function formatCurrency(value) {
+    return new Intl.NumberFormat('pt-AO', {
+        style: 'currency',
+        currency: 'AOA'
+    }).format(value || 0);
+}
+
+// Função melhorada para enviar notificação WhatsApp
 async function sendPropertyApprovalWhatsApp(brokerEmail, propertyDetails, baseUrl) {
-    console.log('Iniciando envio de notificação WhatsApp:', {
-        brokerEmail,
-        propertyId: propertyDetails.id,
-        baseUrl
-    });
-
-    if (!brokerEmail || !propertyDetails || !baseUrl) {
-        console.error('Parâmetros inválidos:', { brokerEmail, propertyDetails, baseUrl });
-        throw new Error('Parâmetros obrigatórios não fornecidos');
-    }
-
     try {
-        // Buscar o número do WhatsApp usando o email do corretor
-        console.log('Buscando contato do corretor:', brokerEmail);
+        console.log('Iniciando processo de notificação WhatsApp:', {
+            brokerEmail,
+            propertyId: propertyDetails.id
+        });
+
+        // Validações iniciais
+        if (!brokerEmail || !propertyDetails || !baseUrl) {
+            throw new Error('Parâmetros obrigatórios não fornecidos');
+        }
+
+        // Buscar o contato do corretor
         const { data: brokerContact, error: contactError } = await supabaseClient
             .from('broker_contacts')
-            .select('whatsapp_numbers')
+            .select('whatsapp_numbers, broker_email')
             .eq('broker_email', brokerEmail)
             .single();
 
-        if (contactError) {
+        if (contactError || !brokerContact?.whatsapp_numbers) {
             console.error('Erro ao buscar contato do corretor:', {
                 error: contactError,
                 brokerEmail
             });
-            throw new Error('Erro ao buscar contato do corretor');
+            throw new Error('Contato do corretor não encontrado');
         }
 
-        if (!brokerContact?.whatsapp_numbers) {
-            console.error('Número de WhatsApp não encontrado:', {
-                brokerEmail,
-                brokerContact
-            });
-            throw new Error('Número de WhatsApp não encontrado para este corretor');
-        }
+        // Gerar o link do imóvel
+        const propertySlug = propertyDetails.address
+            ?.toLowerCase()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^\w\s-]/g, '')
+            .replace(/\s+/g, '-')
+            .replace(/-+/g, '-')
+            .trim() || 'endereco-nao-informado';
 
-        console.log('Contato do corretor encontrado:', {
-            brokerEmail,
-            whatsappNumber: brokerContact.whatsapp_numbers
-        });
-
-        const createSlug = (address) => {
-            return address
-                ?.toLowerCase()
-                .normalize('NFD')
-                .replace(/[\u0300-\u036f]/g, '')
-                .replace(/[^\w\s-]/g, '')
-                .replace(/\s+/g, '-')
-                .replace(/-+/g, '-')
-                .trim()
-                || 'endereco-nao-informado';
-        };
-
-        const propertySlug = createSlug(propertyDetails.address);
         const propertyLink = `${baseUrl}/view-listing/${propertyDetails.id}/${propertySlug}`;
 
-        console.log('Link do imóvel gerado:', propertyLink);
-
+        // Criar a mensagem
         const message = `
-🏠 *Parabéns! Seu imóvel foi aprovado*
+🏠 *Novo Imóvel Aprovado!*
 
-Seu imóvel localizado em *${propertyDetails.address}* foi aprovado e já está disponível em nossa plataforma.
+Olá,
 
-*Detalhes do imóvel:*
+Seu imóvel localizado em *${propertyDetails.address}* foi aprovado com sucesso e já está disponível em nossa plataforma.
+
+*Detalhes do Imóvel:*
 📍 Tipo: ${propertyDetails.propertyType || 'Não informado'}
 🛏️ Quartos: ${propertyDetails.bedroom || 0}
 🚿 Banheiros: ${propertyDetails.bathroom || 0}
-💰 Preço: ${new Intl.NumberFormat('pt-AO', { style: 'currency', currency: 'AOA' }).format(propertyDetails.price || 0)}
+💰 Preço: ${formatCurrency(propertyDetails.price)}
 
-Visualize seu imóvel aqui: ${propertyLink}
+🔍 Visualize seu imóvel aqui: ${propertyLink}
 
-Se precisar de alguma alteração ou tiver dúvidas, entre em contato conosco.
+Precisa fazer alguma alteração ou tem dúvidas? Entre em contato conosco!
 
 Atenciosamente,
 Equipe Plata Imobiliária
         `.trim();
 
-        console.log('Preparando envio da mensagem:', {
-            to: brokerContact.whatsapp_numbers,
-            messageLength: message.length
-        });
+        // Verificar configurações do Twilio
+        if (!process.env.TWILIO_ACCOUNT_SID || 
+            !process.env.TWILIO_AUTH_TOKEN || 
+            !process.env.TWILIO_WHATSAPP_NUMBER) {
+            throw new Error('Configurações do Twilio incompletas');
+        }
 
-        // Verificar configuração do Twilio
-        console.log('Verificando configuração do Twilio:', {
-            accountConfigured: !!process.env.TWILIO_ACCOUNT_SID,
-            tokenConfigured: !!process.env.TWILIO_AUTH_TOKEN,
-            whatsappNumberConfigured: !!process.env.TWILIO_WHATSAPP_NUMBER
-        });
-
+        // Enviar a mensagem
+        console.log('Enviando mensagem WhatsApp para:', brokerContact.whatsapp_numbers);
+        
         const response = await twilioClient.messages.create({
             body: message,
             from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
             to: `whatsapp:${brokerContact.whatsapp_numbers}`
         });
 
-        console.log('Notificação WhatsApp enviada com sucesso:', {
-            brokerEmail,
-            whatsappNumber: brokerContact.whatsapp_numbers,
+        console.log('Mensagem WhatsApp enviada com sucesso:', {
             messageSid: response.sid,
             status: response.status
         });
 
         return response;
+
     } catch (error) {
-        console.error('Erro detalhado ao enviar notificação WhatsApp:', {
+        console.error('Erro ao enviar notificação WhatsApp:', {
             error: {
                 message: error.message,
                 code: error.code,
                 status: error.status,
-                moreInfo: error.moreInfo,
                 details: error.details
             },
             brokerEmail,
@@ -481,10 +469,11 @@ Equipe Plata Imobiliária
     }
 }
 
-// Atualizar a rota de aprovação para incluir a notificação WhatsApp
+// Rota de aprovação atualizada
 app.patch('/api/properties/:listingId/approve', async (req, res) => {
     try {
         const { listingId } = req.params;
+        console.log('Iniciando processo de aprovação para listing ID:', listingId);
 
         if (!listingId) {
             return res.status(400).json({
@@ -493,7 +482,7 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
             });
         }
 
-        // Buscar detalhes completos do imóvel
+        // Buscar detalhes do imóvel
         const { data: listing, error: fetchError } = await supabaseClient
             .from('listing')
             .select('*')
@@ -508,7 +497,7 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
             });
         }
 
-        // Verifica se o imóvel já está aprovado
+        // Verificar se já está aprovado
         if (listing.active) {
             return res.status(400).json({
                 success: false,
@@ -516,7 +505,7 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
             });
         }
 
-        // Atualiza o status do imóvel para ativo
+        // Aprovar o imóvel
         const { data: updatedListing, error: updateError } = await supabaseClient
             .from('listing')
             .update({ 
@@ -528,16 +517,13 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
             .single();
 
         if (updateError) {
-            console.error('Erro ao atualizar o imóvel:', updateError);
-            return res.status(500).json({
-                success: false,
-                message: 'Erro ao aprovar o imóvel',
-                error: updateError.message
-            });
+            throw new Error(`Erro ao atualizar o imóvel: ${updateError.message}`);
         }
 
-        // Enviar notificação WhatsApp usando o email do listing
+        // Enviar notificação WhatsApp
         let whatsappNotificationSent = false;
+        let whatsappError = null;
+
         if (listing.email) {
             try {
                 await sendPropertyApprovalWhatsApp(
@@ -546,17 +532,18 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
                     process.env.BASE_URL
                 );
                 whatsappNotificationSent = true;
-            } catch (whatsappError) {
-                console.error('Erro ao enviar notificação WhatsApp:', whatsappError);
-                // Não interrompe o fluxo se a notificação falhar
+            } catch (error) {
+                console.error('Erro ao enviar notificação WhatsApp:', error);
+                whatsappError = error.message;
             }
         }
 
-        // Retorna o imóvel atualizado como resposta
+        // Retornar resposta
         return res.status(200).json({
             success: true,
             message: 'Imóvel aprovado com sucesso',
             whatsappNotificationSent,
+            whatsappError,
             listing: updatedListing
         });
 
@@ -569,7 +556,92 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
         });
     }
 });
+// Rota de teste detalhada para WhatsApp
+app.post('/api/test-whatsapp', async (req, res) => {
+    const { phone } = req.body;
+    
+    // Log inicial
+    console.log('Iniciando teste de envio de WhatsApp:', {
+        receivedPhone: phone,
+        twilioConfig: {
+            accountSidExists: !!process.env.TWILIO_ACCOUNT_SID,
+            authTokenExists: !!process.env.TWILIO_AUTH_TOKEN,
+            whatsappNumberExists: !!process.env.TWILIO_WHATSAPP_NUMBER
+        }
+    });
 
+    // Validação básica
+    if (!phone) {
+        return res.status(400).json({
+            success: false,
+            error: 'Número de telefone é obrigatório',
+            received: { phone }
+        });
+    }
+
+    // Formatar o número (garantir que está no formato correto)
+    let formattedPhone = phone;
+    if (!phone.startsWith('+')) {
+        formattedPhone = `+${phone}`;
+    }
+    
+    try {
+        // Log antes do envio
+        console.log('Tentando enviar mensagem:', {
+            to: `whatsapp:${formattedPhone}`,
+            from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
+        });
+
+        // Tentar enviar a mensagem
+        const response = await twilioClient.messages.create({
+            body: "🔍 Teste de mensagem do sistema Plata\n\nSe você recebeu esta mensagem, significa que a configuração do WhatsApp está funcionando corretamente!\n\nAtenciosamente,\nEquipe Plata",
+            from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
+            to: `whatsapp:${formattedPhone}`
+        });
+        
+        // Log de sucesso
+        console.log('Mensagem enviada com sucesso:', {
+            messageSid: response.sid,
+            status: response.status,
+            to: formattedPhone
+        });
+
+        // Resposta de sucesso
+        res.json({
+            success: true,
+            messageSid: response.sid,
+            status: response.status,
+            details: {
+                to: formattedPhone,
+                from: process.env.TWILIO_WHATSAPP_NUMBER
+            }
+        });
+
+    } catch (error) {
+        // Log de erro detalhado
+        console.error('Erro ao enviar mensagem:', {
+            error: {
+                message: error.message,
+                code: error.code,
+                status: error.status,
+                moreInfo: error.moreInfo,
+                details: error.details
+            },
+            phone: formattedPhone
+        });
+
+        // Resposta de erro
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            errorCode: error.code,
+            details: {
+                to: formattedPhone,
+                twilioError: error.moreInfo
+            }
+        });
+    }
+});
 // Endpoint para criar o título
 app.post('/api/listing/title', async (req, res) => {
     const { listingId } = req.body;
