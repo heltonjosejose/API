@@ -361,49 +361,66 @@ app.get('/api/properties/pending', async (req, res) => {
         res.status(500).send({ message: 'Erro ao processar a requisição.' });
     }
 });
-// Função para enviar notificação de aprovação via WhatsApp
 async function sendPropertyApprovalWhatsApp(brokerEmail, propertyDetails, baseUrl) {
+    console.log('Iniciando envio de notificação WhatsApp:', {
+        brokerEmail,
+        propertyId: propertyDetails.id,
+        baseUrl
+    });
+
     if (!brokerEmail || !propertyDetails || !baseUrl) {
+        console.error('Parâmetros inválidos:', { brokerEmail, propertyDetails, baseUrl });
         throw new Error('Parâmetros obrigatórios não fornecidos');
     }
 
-    // Buscar o número do WhatsApp usando o email do corretor
-    const { data: brokerContact, error: contactError } = await supabaseClient
-        .from('broker_contacts')
-        .select('whatsapp_numbers')
-        .eq('broker_email', brokerEmail)
-        .single();
+    try {
+        // Buscar o número do WhatsApp usando o email do corretor
+        console.log('Buscando contato do corretor:', brokerEmail);
+        const { data: brokerContact, error: contactError } = await supabaseClient
+            .from('broker_contacts')
+            .select('whatsapp_numbers')
+            .eq('broker_email', brokerEmail)
+            .single();
 
-    if (contactError || !brokerContact?.whatsapp_numbers) {
-        console.error('Erro ao buscar contato do corretor:', contactError);
-        throw new Error('Número de WhatsApp não encontrado para este corretor');
-    }
+        if (contactError) {
+            console.error('Erro ao buscar contato do corretor:', {
+                error: contactError,
+                brokerEmail
+            });
+            throw new Error('Erro ao buscar contato do corretor');
+        }
 
-    // Função para formatar valores monetários
-    const formatCurrency = (value) => {
-        return new Intl.NumberFormat('pt-AO', {
-            style: 'currency',
-            currency: 'AOA'
-        }).format(value);
-    };
+        if (!brokerContact?.whatsapp_numbers) {
+            console.error('Número de WhatsApp não encontrado:', {
+                brokerEmail,
+                brokerContact
+            });
+            throw new Error('Número de WhatsApp não encontrado para este corretor');
+        }
 
-    // Criar o slug a partir do endereço (função auxiliar)
-    const createSlug = (address) => {
-        return address
-            ?.toLowerCase()
-            .normalize('NFD')
-            .replace(/[\u0300-\u036f]/g, '') // Remove acentos
-            .replace(/[^\w\s-]/g, '') // Remove caracteres especiais
-            .replace(/\s+/g, '-') // Substitui espaços por hífens
-            .replace(/-+/g, '-') // Remove hífens duplicados
-            .trim() // Remove espaços no início e fim
-            || 'endereco-nao-informado';
-    };
+        console.log('Contato do corretor encontrado:', {
+            brokerEmail,
+            whatsappNumber: brokerContact.whatsapp_numbers
+        });
 
-    const propertySlug = createSlug(propertyDetails.address);
-    const propertyLink = `${baseUrl}/view-listing/${propertyDetails.id}/${propertySlug}`;
+        const createSlug = (address) => {
+            return address
+                ?.toLowerCase()
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .replace(/[^\w\s-]/g, '')
+                .replace(/\s+/g, '-')
+                .replace(/-+/g, '-')
+                .trim()
+                || 'endereco-nao-informado';
+        };
 
-    const message = `
+        const propertySlug = createSlug(propertyDetails.address);
+        const propertyLink = `${baseUrl}/view-listing/${propertyDetails.id}/${propertySlug}`;
+
+        console.log('Link do imóvel gerado:', propertyLink);
+
+        const message = `
 🏠 *Parabéns! Seu imóvel foi aprovado*
 
 Seu imóvel localizado em *${propertyDetails.address}* foi aprovado e já está disponível em nossa plataforma.
@@ -412,7 +429,7 @@ Seu imóvel localizado em *${propertyDetails.address}* foi aprovado e já está 
 📍 Tipo: ${propertyDetails.propertyType || 'Não informado'}
 🛏️ Quartos: ${propertyDetails.bedroom || 0}
 🚿 Banheiros: ${propertyDetails.bathroom || 0}
-💰 Preço: ${formatCurrency(propertyDetails.price || 0)}
+💰 Preço: ${new Intl.NumberFormat('pt-AO', { style: 'currency', currency: 'AOA' }).format(propertyDetails.price || 0)}
 
 Visualize seu imóvel aqui: ${propertyLink}
 
@@ -420,25 +437,46 @@ Se precisar de alguma alteração ou tiver dúvidas, entre em contato conosco.
 
 Atenciosamente,
 Equipe Plata Imobiliária
-    `.trim();
+        `.trim();
 
-    try {
-        // Validar e formatar o número do WhatsApp
-        const whatsappNumber = brokerContact.whatsapp_numbers.replace(/\D/g, '');
-        if (!whatsappNumber) {
-            throw new Error('Número de WhatsApp inválido');
-        }
+        console.log('Preparando envio da mensagem:', {
+            to: brokerContact.whatsapp_numbers,
+            messageLength: message.length
+        });
+
+        // Verificar configuração do Twilio
+        console.log('Verificando configuração do Twilio:', {
+            accountConfigured: !!process.env.TWILIO_ACCOUNT_SID,
+            tokenConfigured: !!process.env.TWILIO_AUTH_TOKEN,
+            whatsappNumberConfigured: !!process.env.TWILIO_WHATSAPP_NUMBER
+        });
 
         const response = await twilioClient.messages.create({
             body: message,
             from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
-            to: `whatsapp:${whatsappNumber}`
+            to: `whatsapp:${brokerContact.whatsapp_numbers}`
         });
 
-        console.log(`Notificação de aprovação enviada via WhatsApp para ${whatsappNumber}, SID: ${response.sid}`);
+        console.log('Notificação WhatsApp enviada com sucesso:', {
+            brokerEmail,
+            whatsappNumber: brokerContact.whatsapp_numbers,
+            messageSid: response.sid,
+            status: response.status
+        });
+
         return response;
     } catch (error) {
-        console.error(`Erro ao enviar notificação WhatsApp:`, error);
+        console.error('Erro detalhado ao enviar notificação WhatsApp:', {
+            error: {
+                message: error.message,
+                code: error.code,
+                status: error.status,
+                moreInfo: error.moreInfo,
+                details: error.details
+            },
+            brokerEmail,
+            propertyId: propertyDetails.id
+        });
         throw error;
     }
 }
