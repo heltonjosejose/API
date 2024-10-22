@@ -361,60 +361,55 @@ app.get('/api/properties/pending', async (req, res) => {
         res.status(500).send({ message: 'Erro ao processar a requisição.' });
     }
 });
-// Função para enviar notificação de aprovação via WhatsApp para corretores
-async function sendBrokerApprovalWhatsApp(brokerPhone, propertyDetails, baseUrl) {
-    // Criar o slug a partir do endereço
+// Função para enviar notificação de aprovação via WhatsApp
+async function sendPropertyApprovalWhatsApp(userPhone, propertyDetails, baseUrl) {
+    // Criar o slug a partir do endereço (função auxiliar)
     const createSlug = (address) => {
         return address
             .toLowerCase()
-            .replace(/[^\w\s-]/g, '')
-            .replace(/\s+/g, '-')
-            .replace(/-+/g, '-')
-            .trim();
+            .replace(/[^\w\s-]/g, '') // Remove caracteres especiais
+            .replace(/\s+/g, '-') // Substitui espaços por hífens
+            .replace(/-+/g, '-') // Remove hífens duplicados
+            .trim(); // Remove espaços no início e fim
     };
 
     const propertySlug = createSlug(propertyDetails.address);
     const propertyLink = `${baseUrl}/view-listing/${propertyDetails.id}/${propertySlug}`;
 
     const message = `
-🏠 *Novo Imóvel Aprovado para Venda/Aluguel*
+🏠 *Parabéns! Seu imóvel foi aprovado*
 
-Um novo imóvel foi aprovado e está disponível para comercialização.
+Seu imóvel localizado em *${propertyDetails.address}* foi aprovado e já está disponível em nossa plataforma.
 
 *Detalhes do imóvel:*
-📍 Localização: ${propertyDetails.address}
-🏢 Tipo: ${propertyDetails.propertyType}
+📍 Tipo: ${propertyDetails.propertyType}
 🛏️ Quartos: ${propertyDetails.bedroom}
 🚿 Banheiros: ${propertyDetails.bathroom}
 💰 Preço: AOA ${propertyDetails.price.toFixed(2)}
 
-*Informações do Proprietário:*
-👤 Nome: ${propertyDetails.users?.full_name || 'Não informado'}
-📞 Telefone: ${propertyDetails.users?.phone || 'Não informado'}
-📧 Email: ${propertyDetails.users?.email || 'Não informado'}
+Visualize seu imóvel aqui: ${propertyLink}
 
-Visualize o imóvel aqui: ${propertyLink}
-
-Por favor, comece a divulgar este imóvel e entre em contato com o proprietário para alinhar as estratégias de comercialização.
+Se precisar de alguma alteração ou tiver dúvidas, entre em contato conosco.
 
 Atenciosamente,
-Equipe Plata Imobiliária`;
+Equipe Plata Imobiliária
+    `;
 
     try {
         const response = await twilioClient.messages.create({
             body: message,
             from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
-            to: `whatsapp:${brokerPhone}`
+            to: `whatsapp:${userPhone}`
         });
-        console.log(`Notificação de aprovação enviada via WhatsApp para corretor ${brokerPhone}, SID: ${response.sid}`);
+        console.log(`Notificação de aprovação enviada via WhatsApp para ${userPhone}, SID: ${response.sid}`);
         return response;
     } catch (error) {
-        console.error(`Erro ao enviar notificação WhatsApp para corretor ${brokerPhone}:`, error);
+        console.error(`Erro ao enviar notificação WhatsApp para ${userPhone}:`, error);
         throw error;
     }
 }
 
-// Rota de aprovação atualizada
+// Atualizar a rota de aprovação para incluir a notificação WhatsApp
 app.patch('/api/properties/:listingId/approve', async (req, res) => {
     try {
         const { listingId } = req.params;
@@ -425,14 +420,10 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
             });
         }
 
-        // Buscar detalhes completos do imóvel, informações do usuário e do corretor
+        // Buscar detalhes completos do imóvel e informações do usuário
         const { data: listing, error: fetchError } = await supabaseClient
             .from('listing')
-            .select(`
-                *,
-                users!inner(*),
-                broker_contacts(whatsapp_numbers)
-            `)
+            .select('*, users!inner(*)')
             .eq('id', listingId)
             .single();
 
@@ -469,34 +460,17 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
             });
         }
 
-        // Array para armazenar as promessas de notificação dos corretores
-        const notificationPromises = [];
-
-        // Enviar notificação apenas para os números dos corretores
-        if (listing.broker_contacts?.whatsapp_numbers) {
-            const brokerNumbers = Array.isArray(listing.broker_contacts.whatsapp_numbers)
-                ? listing.broker_contacts.whatsapp_numbers
-                : [listing.broker_contacts.whatsapp_numbers];
-
-            brokerNumbers.forEach(phone => {
-                notificationPromises.push(
-                    sendBrokerApprovalWhatsApp(
-                        phone,
-                        listing,
-                        process.env.BASE_URL
-                    )
-                );
-            });
-        }
-
-        // Aguardar todas as notificações serem enviadas
-        if (notificationPromises.length > 0) {
+        // Enviar notificação WhatsApp se o usuário tiver número de telefone
+        if (listing.users?.phone) {
             try {
-                await Promise.all(notificationPromises);
-                console.log('Todas as notificações foram enviadas com sucesso para os corretores');
-            } catch (notificationError) {
-                console.error('Erro ao enviar algumas notificações para corretores:', notificationError);
-                // Não interrompe o fluxo se alguma notificação falhar
+                await sendPropertyApprovalWhatsApp(
+                    listing.users.phone,
+                    listing,
+                    process.env.BASE_URL
+                );
+            } catch (whatsappError) {
+                console.error('Erro ao enviar notificação WhatsApp:', whatsappError);
+                // Não interrompe o fluxo se a notificação falhar
             }
         }
 
