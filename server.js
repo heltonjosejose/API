@@ -806,6 +806,211 @@ app.post('/api/listing/title', async (req, res) => {
     }
 });
 
+// Função para monitorar disponibilidade dos imóveis
+async function monitorPropertyAvailability() {
+    console.log('[DEBUG] Iniciando monitoramento de disponibilidade dos imóveis');
+
+    try {
+        // Buscar imóveis ativos
+        const { data: activeListings, error: fetchError } = await supabaseClient
+            .from('listing')
+            .select(`
+                id,
+                createdBy,
+                address,
+                propertyType,
+                price,
+                created_at,
+                last_availability_check,
+                type
+            `)
+            .eq('active', true);
+
+        if (fetchError) {
+            console.error('[DEBUG] Erro ao buscar imóveis:', fetchError);
+            return;
+        }
+
+        const currentDate = new Date();
+        const defaultCheckThreshold = 30; // Dias para verificação padrão (venda)
+        const urgentCheckThreshold = 2; // Dias para verificação urgente (aluguel em áreas específicas)
+
+        // Função auxiliar para verificar se é uma área de alta rotatividade
+        const isHighTurnoverArea = (address) => {
+            const highTurnoverKeywords = ['kilamba', 'zango 0', 'urbanização nova vida'];
+            return highTurnoverKeywords.some(keyword => 
+                address.toLowerCase().includes(keyword.toLowerCase())
+            );
+        };
+
+        // Filtrar imóveis que precisam de verificação
+        const listingsToCheck = activeListings.filter(listing => {
+            const lastCheck = listing.last_availability_check 
+                ? new Date(listing.last_availability_check) 
+                : new Date(listing.created_at);
+            
+            const daysSinceLastCheck = Math.floor((currentDate - lastCheck) / (1000 * 60 * 60 * 24));
+            
+            // Determinar o limite de dias com base no tipo e localização
+            const isRental = listing.type === 'rent';
+            const isHighTurnover = isHighTurnoverArea(listing.address);
+            
+            const threshold = (isRental && isHighTurnover) 
+                ? urgentCheckThreshold 
+                : defaultCheckThreshold;
+            
+            return daysSinceLastCheck >= threshold;
+        });
+
+        console.log(`[DEBUG] ${listingsToCheck.length} imóveis precisam de verificação`);
+
+        for (const listing of listingsToCheck) {
+            // Buscar contato do corretor
+            const { data: brokerContact, error: contactError } = await supabaseClient
+                .from('broker_contacts')
+                .select('whatsapp_numbers, broker_email')
+                .eq('broker_email', listing.createdBy)
+                .single();
+
+            if (contactError || !brokerContact?.whatsapp_numbers) {
+                console.error(`[DEBUG] Erro ao buscar contato do corretor para imóvel ${listing.id}:`, contactError);
+                continue;
+            }
+
+            // Criar mensagem de verificação com urgência para áreas específicas
+            const isHighTurnover = isHighTurnoverArea(listing.address);
+            const isRental = listing.type === 'rent';
+            const urgencyPrefix = (isRental && isHighTurnover) 
+                ? '⚠️ *VERIFICAÇÃO URGENTE*\n\n' 
+                : '';
+
+            const message = `
+${urgencyPrefix}🏠 *Verificação de Disponibilidade*
+
+Olá! Estamos realizando uma verificação ${isRental && isHighTurnover ? 'urgente' : 'de rotina'}.
+
+*Sobre o imóvel:*
+📍 Endereço: ${listing.address}
+🏢 Tipo: ${listing.propertyType}
+💰 Preço: ${formatCurrency(listing.price)}
+📋 Finalidade: ${listing.type === 'rent' ? 'Aluguel' : 'Venda'}
+
+Por favor, confirme se este imóvel ainda está disponível respondendo com:
+1️⃣ - Sim, ainda está disponível
+2️⃣ - Não, já foi vendido/alugado
+3️⃣ - Preciso atualizar informações
+
+${isRental && isHighTurnover ? '⚡ Resposta urgente necessária devido à alta demanda na região!' : 'Sua resposta nos ajuda a manter nossa plataforma atualizada!'}
+
+Atenciosamente,
+Equipe Plata Imobiliária
+            `.trim();
+
+            try {
+                // Enviar mensagem WhatsApp
+                await twilioClient.messages.create({
+                    body: message,
+                    from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
+                    to: `whatsapp:${brokerContact.whatsapp_numbers}`
+                });
+
+                // Atualizar data da última verificação
+                await supabaseClient
+                    .from('listing')
+                    .update({ 
+                        last_availability_check: new Date().toISOString()
+                    })
+                    .eq('id', listing.id);
+
+                console.log(`[DEBUG] Verificação enviada para imóvel ${listing.id}`);
+                
+                // Aguardar um pouco entre cada envio para evitar limitações de API
+                await new Promise(resolve => setTimeout(resolve, 1000));
+
+            } catch (error) {
+                console.error(`[DEBUG] Erro ao enviar verificação para imóvel ${listing.id}:`, error);
+            }
+        }
+
+    } catch (error) {
+        console.error('[DEBUG] Erro no monitoramento de disponibilidade:', error);
+    }
+
+    // Agendar próxima verificação
+    console.log('[DEBUG] Agendando próxima verificação em 24 horas');
+    setTimeout(monitorPropertyAvailability, 24 * 60 * 60 * 1000);
+}
+
+// Webhook para receber respostas do WhatsApp via Twilio
+app.post('/api/whatsapp-webhook', async (req, res) => {
+    try {
+        const { Body, From } = req.body;
+        console.log('[DEBUG] Recebida resposta WhatsApp:', { From, Body });
+
+        // Buscar corretor pelo número do WhatsApp
+        const whatsappNumber = From.replace('whatsapp:', '');
+        const { data: broker, error: brokerError } = await supabaseClient
+            .from('broker_contacts')
+            .select('broker_email')
+            .eq('whatsapp_numbers', whatsappNumber)
+            .single();
+
+        if (brokerError || !broker) {
+            console.error('[DEBUG] Corretor não encontrado:', brokerError);
+            return res.status(404).send('Broker not found');
+        }
+
+        // Processar resposta
+        const response = Body.trim();
+        
+        switch (response) {
+            case '1':
+                // Imóvel ainda disponível - não precisa fazer nada
+                break;
+            
+            case '2':
+                // Imóvel vendido/alugado - desativar
+                await supabaseClient
+                    .from('listing')
+                    .update({ 
+                        active: false,
+                        deactivation_reason: 'sold',
+                        deactivated_at: new Date().toISOString()
+                    })
+                    .eq('createdBy', broker.broker_email)
+                    .eq('active', true);
+                break;
+            
+            case '3':
+                // Precisa atualizar informações
+                // Enviar link para atualização
+                const updateMessage = `
+🔄 Para atualizar as informações do imóvel, acesse:
+${process.env.FRONTEND_URL}/update-listing
+
+Atenciosamente,
+Equipe Plata Imobiliária
+                `.trim();
+
+                await twilioClient.messages.create({
+                    body: updateMessage,
+                    from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
+                    to: From
+                });
+                break;
+        }
+
+        res.status(200).send('OK');
+
+    } catch (error) {
+        console.error('[DEBUG] Erro ao processar resposta WhatsApp:', error);
+        res.status(500).send('Error processing webhook');
+    }
+});
+
+// Iniciar o monitoramento quando o servidor iniciar
+monitorPropertyAvailability();
+
 
 // Iniciar o monitoramento contínuo
 monitorVisits();
