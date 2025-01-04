@@ -986,7 +986,7 @@ app.post('/api/whatsapp-webhook', async (req, res) => {
                 // Enviar link para atualização
                 const updateMessage = `
 🔄 Para atualizar as informações do imóvel, acesse:
-${process.env.FRONTEND_URL}/update-listing
+${process.env.FRONTEND_URL}
 
 Atenciosamente,
 Equipe Plata Imobiliária
@@ -1005,6 +1005,174 @@ Equipe Plata Imobiliária
     } catch (error) {
         console.error('[DEBUG] Erro ao processar resposta WhatsApp:', error);
         res.status(500).send('Error processing webhook');
+    }
+});
+
+// Rota para notificações
+app.post('/api/notifications', async (req, res) => {
+    try {
+        const { type, data } = req.body;
+
+        switch (type) {
+            case 'visit_approved':
+                // Notificar visitante que a visita foi aprovada
+                await Promise.all([
+                    sendEmail({
+                        from: '"Plata" <plataimobiliaria@gmail.com>',
+                        to: data.visitor_email,
+                        subject: 'Sua visita foi aprovada!',
+                        html: `
+                            <p>Olá ${data.visitor_name}!</p>
+                            
+                            <p>Sua visita ao imóvel ${data.property_title} foi aprovada para o dia ${data.date} às ${data.time}.</p>
+                            
+                            <p>Aguarde o contato do vistoriador para confirmar os detalhes.</p>
+                            
+                            <p>Atenciosamente,<br>
+                            Equipe Plata</p>
+                        `
+                    }),
+                    // Notificar via WhatsApp se houver número de telefone
+                    data.visitor_phone ? 
+                        twilioClient.messages.create({
+                            body: `Olá ${data.visitor_name}! 
+                            
+Sua visita ao imóvel ${data.property_title} foi aprovada para ${data.date} às ${data.time}.
+
+Aguarde o contato do vistoriador.`,
+                            from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
+                            to: `whatsapp:${data.visitor_phone}`
+                        }) : 
+                        Promise.resolve()
+                ]);
+                break;
+
+            case 'visit_rejected':
+                await sendEmail({
+                    from: '"Plata" <plataimobiliaria@gmail.com>',
+                    to: data.visitor_email,
+                    subject: 'Status da sua visita',
+                    html: `
+                        <p>Olá ${data.visitor_name},</p>
+                        
+                        <p>Infelizmente sua visita ao imóvel ${data.property_title} não pôde ser aprovada.</p>
+                        
+                        <p>Você pode tentar agendar em outro horário ou procurar outros imóveis similares.</p>
+                        
+                        <p>Atenciosamente,<br>
+                        Equipe Plata</p>
+                    `
+                });
+                break;
+
+            case 'visit_accompanied':
+                await Promise.all([
+                    // Notificar visitante
+                    sendEmail({
+                        from: '"Plata" <plataimobiliaria@gmail.com>',
+                        to: data.visitor_email,
+                        subject: 'Vistoriador confirmou sua visita',
+                        html: `
+                            <p>Olá ${data.visitor_name}!</p>
+                            
+                            <p>O vistoriador ${data.inspector_name} confirmou que irá acompanhar sua visita ao imóvel ${data.property_title} no dia ${data.date} às ${data.time}.</p>
+                            
+                            <p><strong>Dados do vistoriador:</strong><br>
+                            Nome: ${data.inspector_name}</p>
+                            
+                            <p>Em caso de dúvidas ou necessidade de reagendamento, entre em contato conosco.</p>
+                            
+                            <p>Atenciosamente,<br>
+                            Equipe Plata</p>
+                        `
+                    }),
+                    // Notificar proprietário
+                    sendEmail({
+                        from: '"Plata" <plataimobiliaria@gmail.com>',
+                        to: data.owner_email,
+                        subject: 'Visita confirmada',
+                        html: `
+                            <p>Olá ${data.owner_name}!</p>
+                            
+                            <p>O vistoriador ${data.inspector_name} confirmou que irá acompanhar a visita do(a) ${data.visitor_name} ao seu imóvel ${data.property_title} no dia ${data.date} às ${data.time}.</p>
+                            
+                            <p><strong>Dados da visita:</strong><br>
+                            Visitante: ${data.visitor_name}<br>
+                            Vistoriador: ${data.inspector_name}<br>
+                            Data: ${data.date}<br>
+                            Hora: ${data.time}</p>
+                            
+                            <p>Atenciosamente,<br>
+                            Equipe Plata</p>
+                        `
+                    }),
+                    // Notificações WhatsApp
+                    ...[
+                        data.visitor_phone && twilioClient.messages.create({
+                            from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
+                            to: `whatsapp:${data.visitor_phone}`,
+                            body: `Olá ${data.visitor_name}! 
+
+O vistoriador ${data.inspector_name} confirmou sua visita ao imóvel ${data.property_title} para ${data.date} às ${data.time}.`
+                        }),
+                        data.owner_phone && twilioClient.messages.create({
+                            from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
+                            to: `whatsapp:${data.owner_phone}`,
+                            body: `Olá ${data.owner_name}! 
+
+O vistoriador ${data.inspector_name} confirmou que irá acompanhar a visita de ${data.visitor_name} ao seu imóvel ${data.property_title} em ${data.date} às ${data.time}.`
+                        })
+                    ].filter(Boolean)
+                ]);
+                break;
+
+            case 'visit_rescheduled':
+                await sendEmail({
+                    from: '"Plata" <plataimobiliaria@gmail.com>',
+                    to: [data.owner_email, data.visitor_email],
+                    subject: 'Visita reagendada',
+                    html: `
+                        <p>Olá!</p>
+                        
+                        <p>A visita ao imóvel ${data.property_title} foi reagendada:</p>
+                        
+                        <p><strong>Nova data:</strong> ${data.new_date}<br>
+                        <strong>Novo horário:</strong> ${data.new_time}</p>
+                        
+                        <p>Por favor, confirme se o novo horário é adequado.</p>
+                        
+                        <p>Atenciosamente,<br>
+                        Equipe Plata</p>
+                    `
+                });
+                break;
+
+            case 'visit_cancelled':
+                await sendEmail({
+                    from: '"Plata" <plataimobiliaria@gmail.com>',
+                    to: [data.owner_email, data.visitor_email],
+                    subject: 'Visita cancelada',
+                    html: `
+                        <p>Olá!</p>
+                        
+                        <p>A visita ao imóvel ${data.property_title} foi cancelada.</p>
+                        
+                        <p>Se desejar, você pode reagendar para outro horário.</p>
+                        
+                        <p>Atenciosamente,<br>
+                        Equipe Plata</p>
+                    `
+                });
+                break;
+
+            default:
+                return res.status(400).json({ error: 'Tipo de notificação inválido' });
+        }
+
+        res.status(200).json({ message: 'Notificações enviadas com sucesso' });
+    } catch (error) {
+        console.error('Erro ao enviar notificações:', error);
+        res.status(500).json({ error: 'Erro ao enviar notificações' });
     }
 });
 
