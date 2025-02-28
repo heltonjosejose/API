@@ -30,6 +30,12 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors());
 
+// Adicionar no início do arquivo, após as importações
+const emailNotificationCache = new Map(); // Para armazenar a última data de envio por corretor
+
+// Dentro da função monitorPropertyAvailability, antes do loop de listingsToCheck
+const EMAIL_NOTIFICATION_THRESHOLD = 7 * 24 * 60 * 60 * 1000; // 7 dias em milissegundos
+
 // Função para enviar notificação via WhatsApp
 async function sendWhatsAppNotification(userPhone, listing) {
     const message = `
@@ -396,27 +402,20 @@ async function sendPropertyApprovalWhatsApp(brokerEmail, propertyDetails, baseUr
             twilioWhatsAppNumber: process.env.TWILIO_WHATSAPP_NUMBER
         });
 
-        // Buscar o contato do corretor
-        console.log('[DEBUG] Buscando contato do corretor:', { brokerEmail });
-        const { data: brokerContact, error: contactError } = await supabaseClient
+        // Alternativa usando query SQL
+        const { data: brokerContacts, error: contactError } = await supabaseClient
             .from('broker_contacts')
             .select('whatsapp_numbers, broker_email')
-            .eq('broker_email', brokerEmail)
-            .single();
+            .eq('broker_email', propertyDetails.createdBy);
 
-        console.log('[DEBUG] Resultado da busca do contato:', {
-            found: !!brokerContact,
-            hasWhatsAppNumber: !!brokerContact?.whatsapp_numbers,
-            whatsappNumber: brokerContact?.whatsapp_numbers,
-            error: contactError
-        });
+        if (contactError) {
+            console.error(`[DEBUG] Erro ao buscar contato do corretor para imóvel ${propertyDetails.id}:`, contactError);
+            throw new Error('Contato do corretor não encontrado');
+        }
 
-        if (contactError || !brokerContact?.whatsapp_numbers) {
-            console.error('[DEBUG] Erro ao buscar contato do corretor:', {
-                error: contactError,
-                brokerEmail,
-                brokerContact
-            });
+        const brokerContact = brokerContacts?.[0];
+        if (!brokerContact || !brokerContact.whatsapp_numbers) {
+            console.log(`[DEBUG] Corretor não encontrado ou sem WhatsApp para imóvel ${propertyDetails.id}. Email: ${propertyDetails.createdBy}`);
             throw new Error('Contato do corretor não encontrado');
         }
 
@@ -865,15 +864,74 @@ async function monitorPropertyAvailability() {
         console.log(`[DEBUG] ${listingsToCheck.length} imóveis precisam de verificação`);
 
         for (const listing of listingsToCheck) {
-            // Buscar contato do corretor
-            const { data: brokerContact, error: contactError } = await supabaseClient
+            // Alternativa usando query SQL
+            const { data: brokerContacts, error: contactError } = await supabaseClient
                 .from('broker_contacts')
                 .select('whatsapp_numbers, broker_email')
-                .eq('broker_email', listing.createdBy)
-                .single();
+                .eq('broker_email', listing.createdBy);
 
-            if (contactError || !brokerContact?.whatsapp_numbers) {
+            if (contactError) {
                 console.error(`[DEBUG] Erro ao buscar contato do corretor para imóvel ${listing.id}:`, contactError);
+                continue;
+            }
+
+            const brokerContact = brokerContacts?.[0];
+            if (!brokerContact || !brokerContact.whatsapp_numbers) {
+                console.log(`[DEBUG] Corretor não encontrado ou sem WhatsApp para imóvel ${listing.id}. Email: ${listing.createdBy}`);
+                
+                // Verificar quando foi o último email enviado para este corretor
+                const lastNotification = emailNotificationCache.get(listing.createdBy);
+                const now = Date.now();
+                
+                if (!lastNotification || (now - lastNotification) > EMAIL_NOTIFICATION_THRESHOLD) {
+                    try {
+                        await sendEmail({
+                            from: '"Plata Imobiliária" <plataimobiliaria@gmail.com>',
+                            to: listing.createdBy,
+                            subject: 'Importante: Cadastre seu WhatsApp para receber leads diretos',
+                            html: `
+                                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                                    <h2 style="color: #2c3e50;">Olá, Corretor!</h2>
+                                    
+                                    <p>Notamos que você ainda não cadastrou seu número de WhatsApp na plataforma Plata. 
+                                    Para receber leads e interagir com clientes diretamente via WhatsApp, siga estes passos:</p>
+
+                                    <ol style="line-height: 1.6;">
+                                        <li>Acesse <a href="https://www.plata.ao" style="color: #3498db;">www.plata.ao</a></li>
+                                        <li>Faça login na sua conta</li>
+                                        <li>Clique na sua foto de perfil no canto superior direito</li>
+                                        <li>Selecione "Meu Perfil"</li>
+                                        <li>Clique no botão Menu</li>
+                                        <li>Escolha a opção "Ferramentas"</li>
+                                        <li>Cadastre seu número de WhatsApp</li>
+                                    </ol>
+
+                                    <p style="background-color: #f8f9fa; padding: 15px; border-left: 4px solid #3498db;">
+                                        <strong>Benefícios:</strong><br>
+                                        ✓ Receba leads diretamente no seu WhatsApp<br>
+                                        ✓ Comunicação mais rápida com clientes interessados<br>
+                                        ✓ Aumente suas chances de fechar negócios
+                                    </p>
+
+                                    <p>Não perca mais oportunidades de negócio! Cadastre seu WhatsApp agora.</p>
+
+                                    <p style="margin-top: 20px;">
+                                        Atenciosamente,<br>
+                                        Equipe Plata Imobiliária
+                                    </p>
+                                </div>
+                            `
+                        });
+                        
+                        // Atualizar o cache com a data do envio
+                        emailNotificationCache.set(listing.createdBy, now);
+                        console.log(`[DEBUG] Email de instrução enviado para: ${listing.createdBy}`);
+                    } catch (emailError) {
+                        console.error(`[DEBUG] Erro ao enviar email de instrução para: ${listing.createdBy}`, emailError);
+                    }
+                } else {
+                    console.log(`[DEBUG] Email já enviado recentemente para: ${listing.createdBy}. Próximo envio em: ${new Date(lastNotification + EMAIL_NOTIFICATION_THRESHOLD)}`);
+                }
                 continue;
             }
 
@@ -1014,6 +1072,90 @@ app.post('/api/notifications', async (req, res) => {
         const { type, data } = req.body;
 
         switch (type) {
+            case 'price_reduced':
+            case 'status_update': // Para ações como "Arrendado" ou "Vendido"
+                // Buscar usuários que visualizaram o imóvel
+                const { data: views, error: viewsError } = await supabaseClient
+                    .from('property_views')
+                    .select('user_email, user_phone')
+                    .eq('listing_id', data.listing_id);
+
+                if (viewsError) {
+                    console.error('Erro ao buscar visualizações:', viewsError);
+                    return res.status(500).json({ error: 'Erro ao buscar visualizações' });
+                }
+
+                // Enviar notificações para cada usuário
+                await Promise.all(
+                    views.map(view => {
+                        const emailMessage = `
+                            <p>Olá,</p>
+                            <p>O imóvel "${data.listing_title}" teve uma atualização:</p>
+                            <ul>
+                                <li><strong>Ação:</strong> ${type === 'price_reduced' ? 'Redução de Preço' : 'Status Atualizado'}</li>
+                                ${type === 'price_reduced' ? `
+                                    <li><strong>Preço Antigo:</strong> ${formatCurrency(data.old_price)}</li>
+                                    <li><strong>Novo Preço:</strong> ${formatCurrency(data.new_price)}</li>
+                                    <li><strong>Desconto:</strong> ${data.discount_percentage}%</li>
+                                ` : `
+                                    <li><strong>Novo Status:</strong> ${data.status}</li>
+                                `}
+                            </ul>
+                            <p>Para mais detalhes, acesse o link abaixo:</p>
+                            <p>
+                                <a href="${data.listing_link}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">
+                                    Ver Imóvel
+                                </a>
+                            </p>
+                            <p>Atenciosamente,<br>Equipe Plata</p>
+                        `;
+
+                        const whatsappMessage = `
+🏠 *Atualização no Imóvel*
+
+Olá!
+
+O imóvel "${data.listing_title}" teve uma atualização:
+
+${type === 'price_reduced' ? `
+💰 *Redução de Preço*
+- Preço Antigo: ${formatCurrency(data.old_price)}
+- Novo Preço: ${formatCurrency(data.new_price)}
+- Desconto: ${data.discount_percentage}%
+` : `
+📋 *Status Atualizado*
+- Novo Status: ${data.status}
+`}
+
+Para mais detalhes, acesse:
+${data.listing_link}
+
+Atenciosamente,
+Equipe Plata
+                        `.trim();
+
+                        return Promise.all([
+                            // Enviar e-mail
+                            sendEmail({
+                                from: '"Plata" <plataimobiliaria@gmail.com>',
+                                to: view.user_email,
+                                subject: type === 'price_reduced' ? 'Redução de Preço no Imóvel' : 'Status do Imóvel Atualizado',
+                                html: emailMessage,
+                            }),
+                            // Enviar WhatsApp (se houver número de telefone)
+                            view.user_phone ? 
+                                twilioClient.messages.create({
+                                    body: whatsappMessage,
+                                    from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
+                                    to: `whatsapp:${view.user_phone}`,
+                                }) : 
+                                Promise.resolve(),
+                        ]);
+                    })
+                );
+                break;
+
+            // Casos existentes (visit_approved, visit_rejected, etc.)
             case 'visit_approved':
                 // Notificar visitante que a visita foi aprovada
                 await Promise.all([
@@ -1175,7 +1317,6 @@ O vistoriador ${data.inspector_name} confirmou que irá acompanhar a visita de $
         res.status(500).json({ error: 'Erro ao enviar notificações' });
     }
 });
-
 // Iniciar o monitoramento quando o servidor iniciar
 monitorPropertyAvailability();
 
