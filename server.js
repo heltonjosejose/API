@@ -26,7 +26,14 @@ const twilioClient = twilio(
 // Configurar Supabase
 const supabaseClient = supabase.createClient(
     process.env.SUPABASE_URL || 'http://62.171.131.151:8000',
-    process.env.NEXT_PUBLIC_SUPABASE_API_KEY
+    process.env.SUPABASE_SERVICE_ROLE_KEY,  // Usando diretamente a service role key como anon key
+    {
+        auth: {
+            autoRefreshToken: false,
+            persistSession: false,
+            detectSessionInUrl: false
+        }
+    }
 );
 
 app.use(express.json());
@@ -549,24 +556,35 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
 
         // Buscar detalhes do imóvel
         console.log('[DEBUG] Buscando detalhes do imóvel:', { listingId });
-        const { data: listing, error: fetchError } = await supabaseClient
+        const { data: listings, error: fetchError } = await supabaseClient
             .from('listing')
-            .select('*, createdBy')  // Explicitamente selecionando o campo createdBy
-            .eq('id', listingId)
-            .single();
+            .select('*, createdBy')
+            .eq('id', listingId);
+
+        const listing = listings?.[0];
 
         console.log('[DEBUG] Resultado da busca do imóvel:', {
             found: !!listing,
             hasError: !!fetchError,
-            createdBy: listing?.createdBy,  // Logando o createdBy em vez de email
-            active: listing?.active
+            createdBy: listing?.createdBy,
+            active: listing?.active,
+            totalFound: listings?.length
         });
 
-        if (fetchError || !listing) {
+        if (fetchError) {
             console.error('[DEBUG] Erro ao buscar imóvel:', {
                 error: fetchError,
                 listingId
             });
+            return res.status(500).json({
+                success: false,
+                message: 'Erro ao buscar imóvel',
+                error: fetchError.message
+            });
+        }
+
+        if (!listing) {
+            console.log('[DEBUG] Imóvel não encontrado:', { listingId });
             return res.status(404).json({
                 success: false,
                 message: 'Imóvel não encontrado'
@@ -583,47 +601,103 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
         }
 
         // Aprovar o imóvel
-        console.log('[DEBUG] Atualizando status do imóvel:', { listingId });
-        const { data: updatedListings, error: updateError } = await supabaseClient
+        console.log('[DEBUG] Atualizando status do imóvel:', { 
+            listingId,
+            body: req.body 
+        });
+
+        // Primeiro, vamos verificar se o registro ainda existe e está acessível
+        const { data: checkListing, error: checkError } = await supabaseClient
             .from('listing')
-            .update({ 
+            .select('*')
+            .eq('id', listingId)
+            .maybeSingle();
+
+        console.log('[DEBUG] Verificação de acesso:', {
+            found: !!checkListing,
+            hasError: !!checkError,
+            error: checkError,
+            data: checkListing
+        });
+
+        if (checkError) {
+            console.error('[DEBUG] Erro ao verificar acesso ao imóvel:', {
+                error: checkError,
+                listingId
+            });
+            return res.status(500).json({
+                success: false,
+                message: 'Erro ao verificar acesso ao imóvel',
+                error: checkError.message
+            });
+        }
+
+        if (!checkListing) {
+            console.error('[DEBUG] Imóvel não encontrado ou sem permissão de acesso:', { listingId });
+            return res.status(404).json({
+                success: false,
+                message: 'Imóvel não encontrado ou sem permissão de acesso'
+            });
+        }
+
+        // Agora tenta a atualização
+        const { data: updatedListing, error: updateError } = await supabaseClient
+            .from('listing')
+            .update({
                 active: true,
                 approved_at: new Date().toISOString()
             })
             .eq('id', listingId)
-            .select();
-
-        const updatedListing = updatedListings?.[0];
+            .select('*')
+            .single();
 
         console.log('[DEBUG] Resultado da atualização:', {
             success: !!updatedListing,
             hasError: !!updateError,
             error: updateError,
+            data: updatedListing
+        });
+
+        if (updateError) {
+            console.error('[DEBUG] Erro ao atualizar imóvel:', {
+                error: updateError,
+                listingId
+            });
+            return res.status(500).json({
+                success: false,
+                message: 'Erro ao atualizar imóvel',
+                error: updateError.message
+            });
+        }
+
+        if (!updatedListing) {
+            console.error('[DEBUG] Imóvel não foi atualizado:', { listingId });
+            return res.status(500).json({
+                success: false,
+                message: 'Imóvel não foi atualizado'
+            });
+        }
+
+        // Se chegou aqui, a atualização foi bem sucedida
+        console.log('[DEBUG] Imóvel atualizado com sucesso:', {
+            listingId,
             updatedListing
         });
 
-        if (updateError || !updatedListing) {
-            console.error('[DEBUG] Erro ao atualizar imóvel:', {
-                error: updateError || 'Nenhum imóvel foi atualizado',
-                listingId
-            });
-            throw new Error(`Erro ao atualizar o imóvel: ${updateError?.message || 'Imóvel não encontrado'}`);
-        }
-
-        // Enviar notificação WhatsApp
+        // Tentar enviar notificação WhatsApp, mas não falhar se não conseguir
         let whatsappNotificationSent = false;
         let whatsappError = null;
 
-        if (listing.createdBy) {  // Verificando createdBy em vez de email
-            console.log('[DEBUG] Iniciando envio de notificação WhatsApp:', {
+        if (listing.createdBy) {
+            console.log('[DEBUG] Tentando enviar notificação WhatsApp:', {
                 createdBy: listing.createdBy,
                 listingId
             });
             try {
                 await sendPropertyApprovalWhatsApp(
-                    listing.createdBy,  // Usando createdBy em vez de email
+                    listing.createdBy,
                     listing,
-                    process.env.BASE_URL
+                    process.env.BASE_URL || 'https://plata.ao'
                 );
                 whatsappNotificationSent = true;
                 console.log('[DEBUG] Notificação WhatsApp enviada com sucesso');
@@ -635,14 +709,11 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
                     listingId
                 });
                 whatsappError = error.message;
+                // Não falhar se o WhatsApp falhar
             }
-        } else {
-            console.log('[DEBUG] CreatedBy não encontrado para envio de notificação:', {
-                listingId
-            });
         }
 
-        // Retornar resposta
+        // Retornar resposta de sucesso mesmo se o WhatsApp falhar
         console.log('[DEBUG] Finalizando processo de aprovação:', {
             listingId,
             whatsappNotificationSent,
@@ -654,7 +725,7 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
             message: 'Imóvel aprovado com sucesso',
             whatsappNotificationSent,
             whatsappError,
-            listing: updatedListing
+            updatedListing: updatedListing
         });
 
     } catch (error) {
