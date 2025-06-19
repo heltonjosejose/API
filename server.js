@@ -584,28 +584,30 @@ app.patch('/api/properties/:listingId/approve', async (req, res) => {
 
         // Aprovar o imóvel
         console.log('[DEBUG] Atualizando status do imóvel:', { listingId });
-        const { data: updatedListing, error: updateError } = await supabaseClient
+        const { data: updatedListings, error: updateError } = await supabaseClient
             .from('listing')
             .update({ 
                 active: true,
                 approved_at: new Date().toISOString()
             })
             .eq('id', listingId)
-            .select()
-            .single();
+            .select();
+
+        const updatedListing = updatedListings?.[0];
 
         console.log('[DEBUG] Resultado da atualização:', {
             success: !!updatedListing,
             hasError: !!updateError,
-            error: updateError
+            error: updateError,
+            updatedListing
         });
 
-        if (updateError) {
+        if (updateError || !updatedListing) {
             console.error('[DEBUG] Erro ao atualizar imóvel:', {
-                error: updateError,
+                error: updateError || 'Nenhum imóvel foi atualizado',
                 listingId
             });
-            throw new Error(`Erro ao atualizar o imóvel: ${updateError.message}`);
+            throw new Error(`Erro ao atualizar o imóvel: ${updateError?.message || 'Imóvel não encontrado'}`);
         }
 
         // Enviar notificação WhatsApp
