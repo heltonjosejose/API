@@ -24,7 +24,10 @@ const twilioClient = twilio(
 );
 
 // Configurar Supabase
-const supabaseClient = supabase.createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_API_KEY);
+const supabaseClient = supabase.createClient(
+    process.env.SUPABASE_URL || 'http://62.171.131.151:8000',
+    process.env.NEXT_PUBLIC_SUPABASE_API_KEY
+);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
